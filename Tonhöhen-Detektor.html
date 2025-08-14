@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Echtzeit‑Tonhöhen‑Detektor</title>
+  <style>
+    :root {
+      --bg: #0f1222;
+      --panel: #141835;
+      --text: #eef1ff;
+      --muted: #9aa3c8;
+      --accent: #6ea8fe;
+      --danger: #ff6b6b;
+      --ok: #7dffa1;
+      --warn: #ffca3a;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: radial-gradient(1200px 800px at 80% -10%, #1d2250, var(--bg));
+      color: var(--text);
+      font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      display: grid;
+      place-items: center;
+    }
+    .app {
+      width: min(960px, 95vw);
+      background: linear-gradient(180deg, #171c40, var(--panel));
+      border: 1px solid #2a3470;
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06);
+    }
+    h1 { margin: 0 0 8px; font-weight: 700; letter-spacing: .2px; }
+    p.sub { margin: 0 0 22px; color: var(--muted); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    .readout {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+      margin: 6px 0 10px;
+    }
+    .card {
+      background: #0f1433;
+      border: 1px solid #283276;
+      border-radius: 14px;
+      padding: 16px 18px;
+      min-height: 86px;
+      display: grid;
+      align-content: center;
+      gap: 6px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .label { color: var(--muted); font-size: 13px; letter-spacing: .3px; text-transform: uppercase; }
+    .value { font-size: 32px; font-weight: 700; letter-spacing: .3px; }
+    .value.small { font-size: 22px; }
+
+    .bar { height: 8px; width: 100%; border-radius: 999px; background: #0b0f26; overflow: hidden; border: 1px solid #263067; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+    .bar > i { display:block; height:100%; width: 0%; background: linear-gradient(90deg, var(--accent), #93c5fd); }
+
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    button {
+      appearance: none; border: 0; padding: 12px 18px; border-radius: 999px; font-weight: 700;
+      background: var(--accent); color: #0a1027; cursor: pointer;
+      box-shadow: 0 8px 24px rgba(110,168,254,.35), inset 0 -3px 0 rgba(0,0,0,.2);
+      transition: transform .06s ease, filter .2s ease;
+    }
+    button:hover { filter: brightness(1.05); }
+    button:active { transform: translateY(1px); }
+    button.secondary { background: #2a335f; color: var(--text); box-shadow: 0 8px 24px rgba(0,0,0,.25) inset 0 -3px 0 rgba(0,0,0,.2); }
+    button:disabled { filter: grayscale(.8) brightness(.7); cursor: not-allowed; }
+
+    .status { margin-top: 4px; color: var(--muted); font-size: 14px; min-height: 20px; }
+    .warn { color: var(--danger); }
+    .ok { color: var(--ok); }
+    .hint { color: var(--warn); }
+
+    details.tests { margin-top: 12px; }
+    details.tests summary { cursor: pointer; }
+    .test-pass { color: var(--ok); font-weight:700; }
+    .test-fail { color: var(--danger); font-weight:700; }
+
+    .diag { font-size: 13px; color: var(--muted); }
+    .diag table { border-collapse: collapse; }
+    .diag td { padding: 2px 8px; border-bottom: 1px solid #283276; }
+
+    @media (max-width: 760px) {
+      .readout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app" role="application" aria-labelledby="title">
+    <h1 id="title">Echtzeit‑Tonhöhen‑Detektor</h1>
+    <p class="sub">Mikrofon aktivieren, Ton singen/spielen → Frequenz &amp; Note erscheinen live.</p>
+
+    <div class="grid">
+      <section class="readout" aria-live="polite" aria-atomic="true">
+        <div class="card">
+          <div class="label">Frequenz (Hz)</div>
+          <div id="freq" class="value">—</div>
+          <div class="bar" aria-hidden="true"><i id="stability"></i></div>
+        </div>
+        <div class="card">
+          <div class="label">Note (international)</div>
+          <div id="noteEN" class="value">—</div>
+          <div class="label">Deutsch</div>
+          <div id="noteDE" class="value small">—</div>
+        </div>
+        <div class="card">
+          <div class="label">Abweichung (Cent)</div>
+          <div id="cents" class="value">—</div>
+          <div class="label">Lautheit</div>
+          <div id="rms" class="value small">—</div>
+        </div>
+      </section>
+
+      <div class="controls">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" class="secondary" disabled>Stop</button>
+        <span id="secureHint" class="hint" aria-live="polite"></span>
+      </div>
+
+      <div id="status" class="status">Bereit.</div>
+
+      <details class="diag">
+        <summary>Diagnose (Sicherer Kontext & Berechtigungen)</summary>
+        <div id="diagTable">Wird geprüft …</div>
+        <div style="margin-top:6px" class="hint">Tipp: Seite über <b>HTTPS</b> oder <b>localhost</b> öffnen. Schloss‑Icon → Website‑Einstellungen → Mikrofon <b>Zulassen</b> → Seite neu laden.</div>
+      </details>
+
+      <details class="tests">
+        <summary>Interne Selbsttests anzeigen (für Debugging)</summary>
+        <div id="testResults">Wird geladen …</div>
+      </details>
+    </div>
+  </main>
+
+  <script>
+    // ====== UI Elements ======
+    const els = {
+      freq: document.getElementById('freq'),
+      noteEN: document.getElementById('noteEN'),
+      noteDE: document.getElementById('noteDE'),
+      cents: document.getElementById('cents'),
+      rms: document.getElementById('rms'),
+      status: document.getElementById('status'),
+      stability: document.getElementById('stability'),
+      startBtn: document.getElementById('startBtn'),
+      stopBtn: document.getElementById('stopBtn'),
+      secureHint: document.getElementById('secureHint'),
+      testResults: document.getElementById('testResults'),
+      diagTable: document.getElementById('diagTable'),
+    };
+
+    // ====== Audio & Analysis State ======
+    let audioCtx = null;
+    let analyser = null;
+    let mediaStream = null;
+    let sourceNode = null;
+    let data = null;
+    let rafId = null;
+
+    // ====== Constants ======
+    const A4 = 440;
+    const A4_MIDI = 69;
+    const NOTE_NAMES_EN = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+    const DE_MAP = {"C":"C","C#":"Cis","D":"D","D#":"Dis","E":"E","F":"F","F#":"Fis","G":"G","G#":"Gis","A":"A","A#":"Ais","B":"H"};
+
+    // ====== Helpers ======
+    function midiFromFreq(freq){
+      return Math.round(12 * Math.log2(freq / A4) + A4_MIDI);
+    }
+    function freqFromMidi(midi){
+      return A4 * Math.pow(2, (midi - A4_MIDI) / 12);
+    }
+    function noteNameFromMidi(midi){
+      const name = NOTE_NAMES_EN[midi % 12];
+      const octave = Math.floor(midi / 12) - 1; // MIDI octave numbering
+      return { en: `${name}${octave}`, de: `${DE_MAP[name]}${octave}` };
+    }
+    function centsBetween(freq, ref){
+      return 1200 * Math.log2(freq / ref);
+    }
+    function formatHz(v){
+      if (!isFinite(v) || v <= 0) return "—";
+      return v >= 100 ? v.toFixed(1) : v.toFixed(2);
+    }
+
+    // ====== Pitch Detection (Auto‑Correlation) ======
+    function autoCorrelate(buf, sampleRate){
+      // Compute RMS to gate very quiet input
+      let rms = 0;
+      for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+      rms = Math.sqrt(rms / buf.length);
+      if (rms < 0.01) return { freq: -1, rms };
+
+      // Auto‑correlation
+      const size = buf.length;
+      const c = new Float32Array(size);
+      for (let lag = 0; lag < size; lag++) {
+        let sum = 0;
+        for (let i = 0; i < size - lag; i++) sum += buf[i] * buf[i + lag];
+        c[lag] = sum;
+      }
+      // Find first reasonable peak
+      let d = 0;
+      while (d + 1 < size && c[d] > c[d + 1]) d++;
+      let maxVal = -1, maxPos = -1;
+      for (let i = d; i < size; i++) {
+        if (c[i] > maxVal) { maxVal = c[i]; maxPos = i; }
+      }
+      if (maxPos <= 0) return { freq: -1, rms };
+
+      // Parabolic interpolation around the peak for a more precise period
+      const x0 = c[maxPos - 1] || 0;
+      const x1 = c[maxPos];
+      const x2 = c[maxPos + 1] || 0;
+      const a = (x0 + x2 - 2 * x1) / 2;
+      const b = (x2 - x0) / 2;
+      let period = maxPos;
+      if (a) period = maxPos - b / (2 * a);
+
+      const freq = sampleRate / period;
+      return { freq, rms };
+    }
+
+    // Simple moving average to stabilize display
+    const lastFreqs = [];
+    function smoothFreq(f){
+      const N = 5;
+      if (f > 0) lastFreqs.push(f);
+      if (lastFreqs.length > N) lastFreqs.shift();
+      if (!lastFreqs.length) return -1;
+      let s = 0; for (const x of lastFreqs) s += x; return s / lastFreqs.length;
+    }
+
+    // ====== Env / Permission Diagnostics ======
+    function isSecure(){
+      if (window.isSecureContext) return true;
+      const h = location.hostname;
+      return h === 'localhost' || h === '127.0.0.1' || h.endsWith('.localhost');
+    }
+
+    async function getMicPermissionState(){
+      if (!('permissions' in navigator) || !navigator.permissions.query) return 'unknown';
+      try {
+        const st = await navigator.permissions.query({ name: 'microphone' });
+        return st.state; // 'granted' | 'denied' | 'prompt'
+      } catch { return 'unknown'; }
+    }
+
+    function explainPermissionFix(errName, permState){
+      const httpsTip = `Diese Seite muss über <b>HTTPS</b> oder <b>localhost</b> geladen werden.`;
+      const howTo = `Klicke in der Adressleiste auf das Schloss → <b>Website‑Einstellungen</b> → <b>Mikrofon</b> auf <b>Zulassen</b> → Seite neu laden.`;
+      const chromeAlt = `Chrome/Edge: <code>chrome://settings/content/microphone</code> öffnen und diese Seite erlauben.`;
+      const ffAlt = `Firefox: Website‑Berechtigungen prüfen (Schloss‑Icon) und Mikrofon erlauben.`;
+      let msg = '';
+      if (!isSecure()) {
+        msg += `<div class="warn">Sicherheitsfehler: Unsichere Quelle.</div><div>${httpsTip}</div>`;
+      }
+      if (errName === 'NotAllowedError' || permState === 'denied') {
+        msg += `<div class="warn">Zugriff verweigert.</div><div>${howTo}</div><div class="hint">${chromeAlt}</div><div class="hint">${ffAlt}</div>`;
+      } else if (errName === 'NotFoundError') {
+        msg += `<div class="warn">Kein Mikrofon gefunden.</div><div>Bitte ein Eingabegerät anschließen bzw. in den Systemeinstellungen auswählen.</div>`;
+      } else if (errName === 'SecurityError') {
+        msg += `<div class="warn">SecurityError.</div><div>${httpsTip}</div>`;
+      }
+      return msg || `<div class="warn">Fehler.</div><div>Bitte Seite neu laden und erneut versuchen.</div>`;
+    }
+
+    function renderSecureHint(){
+      if (!isSecure()) {
+        els.secureHint.textContent = 'Hinweis: Für Mikrofonzugriff bitte über HTTPS oder localhost öffnen.';
+      } else {
+        els.secureHint.textContent = '';
+      }
+    }
+
+    async function renderDiagnostics(){
+      const secure = isSecure();
+      const md = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+      const perm = await getMicPermissionState();
+      const ctxSupport = !!(window.AudioContext || window.webkitAudioContext);
+      const rows = [
+        ['Sicherer Kontext (HTTPS/localhost)', secure ? 'Ja' : 'Nein'],
+        ['getUserMedia verfügbar', md ? 'Ja' : 'Nein'],
+        ['Permissions API', perm === 'unknown' ? 'Unbekannt' : 'Verfügbar'],
+        ['Mikrofon-Berechtigung', perm],
+        ['AudioContext verfügbar', ctxSupport ? 'Ja' : 'Nein'],
+      ];
+      els.diagTable.innerHTML = '<table>' + rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('') + '</table>';
+    }
+
+    // ====== Main Loop ======
+    function update(){
+      analyser.getFloatTimeDomainData(data);
+      const { freq, rms } = autoCorrelate(data, audioCtx.sampleRate);
+      const stable = smoothFreq(freq);
+
+      if (freq === -1 || stable === -1){
+        els.freq.textContent = '—';
+        els.noteEN.textContent = '—';
+        els.noteDE.textContent = '—';
+        els.cents.textContent = '—';
+        els.rms.textContent = (rms ? (rms*100).toFixed(1) : '0.0') + ' %';
+        els.stability.style.width = '0%';
+      } else {
+        const midi = midiFromFreq(stable);
+        const ref = freqFromMidi(midi);
+        const cents = centsBetween(stable, ref);
+        const { en, de } = noteNameFromMidi(midi);
+
+        els.freq.textContent = formatHz(stable);
+        els.noteEN.textContent = en;
+        els.noteDE.textContent = de;
+        els.cents.textContent = (cents > 0 ? '+' : '') + cents.toFixed(1);
+        els.rms.textContent = (rms * 100).toFixed(1) + ' %';
+        const st = Math.max(0, Math.min(1, 1 - Math.abs(cents) / 50)); // crude stability bar within ±50 cent
+        els.stability.style.width = (st * 100).toFixed(0) + '%';
+      }
+      rafId = requestAnimationFrame(update);
+    }
+
+    // ====== Control Flow ======
+    async function start(){
+      renderSecureHint();
+      await renderDiagnostics();
+      try {
+        els.startBtn.disabled = true;
+        els.stopBtn.disabled = true;
+        els.status.textContent = 'Prüfe Berechtigungen …';
+
+        if (!isSecure()) {
+          throw Object.assign(new Error('Diese Seite ist nicht in einem sicheren Kontext geladen.'), { name: 'SecurityError' });
+        }
+
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+        const permState = await getMicPermissionState();
+        if (permState === 'denied') {
+          // Früh abbrechen mit klarer Anleitung
+          throw Object.assign(new Error('Mikrofonberechtigung abgelehnt.'), { name: 'NotAllowedError' });
+        }
+
+        els.status.textContent = 'Frage Mikrofon‑Zugriff an …';
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
+
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.0;
+
+        sourceNode = audioCtx.createMediaStreamSource(mediaStream);
+        sourceNode.connect(analyser);
+
+        data = new Float32Array(analyser.fftSize);
+        els.status.textContent = 'Mikrofon aktiv. Singe/Spiele einen Ton …';
+        els.stopBtn.disabled = false;
+        update();
+      } catch (err){
+        console.error(err);
+        const permState = await getMicPermissionState();
+        els.startBtn.disabled = false;
+        els.stopBtn.disabled = true;
+        els.status.innerHTML = `<span class="warn">Fehler:</span> ${err.message || err}` + '<div style="margin-top:6px">' + explainPermissionFix(err.name, permState) + '</div>';
+      }
+    }
+
+    function stop(){
+      try {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = null;
+        if (sourceNode) { try { sourceNode.disconnect(); } catch(_){} }
+        sourceNode = null;
+        if (analyser) { try { analyser.disconnect(); } catch(_){} }
+        analyser = null;
+        if (mediaStream){
+          for (const t of mediaStream.getTracks()) t.stop();
+          mediaStream = null;
+        }
+        if (audioCtx && audioCtx.state !== 'closed') {
+          audioCtx.close();
+          audioCtx = null;
+        }
+        lastFreqs.length = 0;
+        els.freq.textContent = '—';
+        els.noteEN.textContent = '—';
+        els.noteDE.textContent = '—';
+        els.cents.textContent = '—';
+        els.rms.textContent = '—';
+        els.stability.style.width = '0%';
+        els.status.textContent = 'Gestoppt.';
+      } finally {
+        els.startBtn.disabled = false;
+        els.stopBtn.disabled = true;
+      }
+    }
+
+    // ====== Wire up UI ======
+    els.startBtn.addEventListener('click', start);
+    els.stopBtn.addEventListener('click', stop);
+
+    // Feature detection
+    (function init(){
+      renderSecureHint();
+      renderDiagnostics();
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        els.status.innerHTML = '<span class="warn">Dein Browser unterstützt getUserMedia nicht.</span> Bitte nutze einen aktuellen Chrome/Edge/Firefox oder Safari.';
+        els.startBtn.disabled = true;
+      }
+    })();
+
+    // ====== Self‑Tests (keine Änderung am Verhalten) ======
+    (function runTests(){
+      const results = [];
+      function approxEq(a,b,eps=0.8){ return Math.abs(a-b) <= eps; }
+      function add(name, pass, info=''){ results.push({name, pass, info}); }
+
+      // Test 1: MIDI/Frequenz Umwandlung bei A4
+      try {
+        const midi = midiFromFreq(440);
+        add('midiFromFreq(440) → 69', midi === 69, `= ${midi}`);
+      } catch(e){ add('midiFromFreq(440) wirft Fehler', false, e.message); }
+
+      // Test 2: freqFromMidi(69) ~ 440
+      try {
+        const f = freqFromMidi(69);
+        add('freqFromMidi(69) ≈ 440Hz', approxEq(f, 440, 0.01), `= ${f}`);
+      } catch(e){ add('freqFromMidi(69) wirft Fehler', false, e.message); }
+
+      // Test 3: Notennamen‑Mapping (Deutsch: H statt B)
+      try {
+        const n = noteNameFromMidi(71); // 71 = B4 in EN, H4 in DE
+        add('noteNameFromMidi(71) → de=H4', n.de === 'H4', `= ${n.de}`);
+      } catch(e){ add('noteNameFromMidi wirft Fehler', false, e.message); }
+
+      // Test 4: Autokorrelation findet 440Hz auf synthetischem Sinus
+      try {
+        const sr = 44100;
+        const frames = 2048;
+        const buf = new Float32Array(frames);
+        for (let i=0;i<frames;i++) buf[i] = Math.sin(2*Math.PI*440*i/sr);
+        const {freq} = autoCorrelate(buf, sr);
+        add('autoCorrelate(Sinus 440Hz) ≈ 440Hz', Math.abs(freq-440) < 2, `= ${freq.toFixed(2)}Hz`);
+      } catch(e){ add('autoCorrelate wirft Fehler', false, e.message); }
+
+      // ---- Zusätzliche Tests (nicht ändern der obigen) ----
+      try {
+        const cents = centsBetween(440, 440);
+        add('centsBetween(440,440) = 0', approxEq(cents, 0, 1e-10), `= ${cents}`);
+      } catch(e){ add('centsBetween wirft Fehler', false, e.message); }
+
+      try {
+        const n = noteNameFromMidi(70); // A#4 / Ais4
+        add('noteNameFromMidi(70) → de=Ais4', n.de === 'Ais4', `= ${n.de}`);
+      } catch(e){ add('noteNameFromMidi(70) wirft Fehler', false, e.message); }
+
+      try {
+        add('formatHz(0) → —', formatHz(0) === '—', `= ${formatHz(0)}`);
+      } catch(e){ add('formatHz wirft Fehler', false, e.message); }
+
+      try {
+        // smoothing: leer → -1
+        const r1 = smoothFreq(-1);
+        add('smoothFreq(empty) → -1', r1 === -1, `= ${r1}`);
+        // füttern
+        lastFreqs.length = 0; // reset vor Test
+        [438, 440, 442, 441, 439].forEach(v=>smoothFreq(v));
+        const avg = smoothFreq(440);
+        add('smoothFreq Durchschnitt plausibel', avg>438 && avg<442, `≈ ${avg.toFixed(2)}`);
+      } catch(e){ add('smoothFreq Tests werfen Fehler', false, e.message); }
+
+      const ok = results.filter(r=>r.pass).length;
+      const total = results.length;
+      const html = [
+        `<div><b>Ergebnis:</b> <span class="${ok===total?'test-pass':'test-fail'}">${ok}/${total} Tests bestanden</span></div>`,
+        '<ul style="margin-top:8px; padding-left:18px">',
+        ...results.map(r=>`<li>${r.pass ? '✅' : '❌'} ${r.name} <span style=\"color:#9aa3c8\">${r.info?(' — '+r.info):''}</span></li>`),
+        '</ul>'
+      ].join('');
+      els.testResults.innerHTML = html;
+      // Wichtig: globalen smoothing-Puffer aufräumen, damit Runtime sauber startet
+      lastFreqs.length = 0;
+      console.log('Selbsttests:', results);
+    })();
+  </script>
+</body>
+</html>
